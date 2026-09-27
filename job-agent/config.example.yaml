@@ -1,0 +1,57 @@
+# Copy to config.yaml and edit.
+
+# "dry_run": fills application forms but stops before the final submit button
+#            (sends you a screenshot instead). Start with this.
+# "auto":    actually submits applications.
+mode: dry_run
+
+# Minutes between runs (a random value in this range is picked each time).
+interval_minutes: [30, 60]
+
+# Safety limits.
+max_applications_per_run: 5
+max_applications_per_day: 20
+
+# Jobs scoring below this (0-100) are ignored.
+min_score: 70
+
+# LinkedIn searches (public guest search, no login needed).
+searches:
+  location: Germany
+  # Only look at jobs posted in the last N seconds (7200 = 2h, overlaps runs safely).
+  posted_within_seconds: 7200
+  pages_per_keyword: 2
+  keywords:
+    - Product Manager
+    - Product Owner
+    - Senior Product Manager
+    - Product Operations Manager
+    - Product Manager Fintech
+    - Product Manager Payments
+
+# Skip jobs whose title contains any of these (case-insensitive).
+exclude_title_words:
+  - intern
+  - werkstudent
+  - working student
+  - praktikum
+  - junior
+
+# Answers the agent may use in application forms. Anything missing here and in
+# the profile will NOT be guessed: the agent stops and asks you instead.
+application_facts:
+  first_name: Ahmad
+  last_name: Kazerouni
+  email: ahmadkazerouni@outlook.com
+  phone: ""                      # TODO, e.g. +971 ...
+  current_location: Dubai, United Arab Emirates
+  linkedin: https://www.linkedin.com/in/ahmadkazerouni/
+  work_authorization_germany: "" # TODO, e.g. "Requires visa sponsorship (EU Blue Card eligible)"
+  requires_sponsorship: ""       # TODO: "yes" / "no"
+  salary_expectation_eur: ""     # TODO, e.g. "75,000 EUR gross per year"
+  notice_period: ""              # TODO, e.g. "1 month"
+  earliest_start_date: ""        # TODO
+  willing_to_relocate: "yes"
+  english_level: ""              # TODO, e.g. "C1"
+  german_level: ""               # TODO, e.g. "A2"
+  how_did_you_hear: LinkedIn
