@@ -197,16 +197,31 @@
   }
 
   // ---------- کلاس: گفتگو با معلم ----------
-  function lesson(subjectId, chapterId, basics) {
+  async function lesson(subjectId, chapterId, basics) {
     const subj = findSubject(subjectId);
     const ch = (C.chapters[subjectId] || []).find((c) => c.id === Number(chapterId));
     if (!subj || !ch) return learn();
 
+    render(`<div class="panel" style="padding:24px">در حال آماده کردن کلاس…</div>`);
+    await window.Tutor.ready;
+    const myHash = location.hash;
+
     const key = `${subjectId}-${ch.id}`;
-    const ai = window.Tutor.isAiEnabled();
     const ctx = { grade: subj.grade, subject: subj.title, chapter: ch.title, topics: ch.topics, fromBasics: Boolean(basics) };
     const demo = window.Tutor.createDemoSession(key);
-    const history = []; // برای حالت هوش مصنوعی
+    const history = [];
+    let mode = window.Tutor.provider(); // "claude" | "custom" | "demo"
+    let busy = false;
+    let ctl = null;
+    let pendingImage = null;
+    let voiceOn = false;
+    const imgLim = mode === "claude" ? window.Tutor.imageLimits() : null;
+
+    const modeBadge = () => mode === "claude"
+      ? '<span class="mode ai">معلم هوشمند (Claude)</span>'
+      : mode === "custom"
+        ? '<span class="mode ai">هوش مصنوعی وصل است</span>'
+        : '<a class="mode demo" href="#/settings">حالت نمایشی</a>';
 
     render(`
       <div class="crumbs"><a href="#/">خانه</a> ‹ <a href="#/learn">درس‌ها</a> ‹ <a href="#/chapters/${subjectId}">${subj.title} ${subj.grade}</a> ‹ <span>فصل ${faDigits(ch.id)}</span></div>
@@ -214,18 +229,30 @@
         <section class="panel chat" aria-label="کلاس">
           <div class="chat-head">
             <b>فصل ${faDigits(ch.id)}: ${ch.title}${basics ? " · از پایه" : ""}</b>
-            ${ai ? '<span class="mode ai">هوش مصنوعی وصل است</span>' : '<a class="mode demo" href="#/settings">حالت نمایشی</a>'}
+            <div class="head-tools">
+              <button class="chip" id="voiceBtn" type="button" aria-pressed="false" hidden title="خواندن جواب‌ها با صدا">🔊 صدا</button>
+              <span id="modeBadge">${modeBadge()}</span>
+            </div>
           </div>
           <div class="messages" id="msgs" aria-live="polite"></div>
           <div class="quick" id="quick">
             <button class="chip" data-q="یک مثال دیگر بزن">یک مثال دیگر</button>
             <button class="chip" data-q="نفهمیدم، ساده‌تر توضیح بده">ساده‌تر بگو</button>
             <button class="chip" data-q="یک سؤال تمرینی از من بپرس">سؤال تمرینی</button>
+            <button class="chip" data-q="از این فصل از من امتحان بگیر">امتحان بگیر</button>
+            <button class="chip" data-q="بریم سراغ بخش بعدی">بخش بعدی</button>
+          </div>
+          <div class="attach" id="attachRow" hidden>
+            <span id="attachName"></span>
+            <button class="chip" type="button" id="attachClear">حذف عکس</button>
           </div>
           <form class="composer" id="composer">
-            <label for="msg-input" class="muted" hidden>پیام</label>
-            <input id="msg-input" autocomplete="off" placeholder="جوابت یا سؤالت را بنویس…">
-            <button class="btn primary" type="submit">ارسال</button>
+            <label class="btn ghost icon" id="photoBtn" title="فرستادن عکس سؤال" hidden>
+              📷<input type="file" id="photo-input" accept="image/*" hidden>
+            </label>
+            <input id="msg-input" autocomplete="off" placeholder="جوابت یا سؤالت را بنویس…" aria-label="پیام">
+            <button class="btn primary" type="submit" id="sendBtn">ارسال</button>
+            <button class="btn" type="button" id="stopBtn" hidden>توقف</button>
           </form>
         </section>
         <aside class="side">
@@ -239,8 +266,8 @@
           </div>
           <div class="panel stack">
             <h3>بعد از درس</h3>
-            ${window.QUIZZES[key] ? `<a class="btn" href="#/quiz/${subjectId}/${ch.id}">آزمون این فصل</a>` : '<span class="muted">آزمون این فصل به‌زودی</span>'}
-            <span class="muted" style="font-size:14px">سؤال یا تمرین خودت را هم می‌توانی همین‌جا تایپ کنی تا معلم قدم‌به‌قدم حلش کند.</span>
+            ${window.QUIZZES[key] ? `<a class="btn" href="#/quiz/${subjectId}/${ch.id}">آزمون چهارگزینه‌ای</a>` : ""}
+            <span class="muted" style="font-size:14px">سؤال یا تمرین خودت را همین‌جا بنویس${imgLim ? " یا عکسش را بفرست" : ""} تا معلم قدم‌به‌قدم با تو حلش کند.</span>
           </div>
         </aside>
       </div>
@@ -249,6 +276,8 @@
     const $msgs = document.getElementById("msgs");
     const $input = document.getElementById("msg-input");
     const $bar = document.getElementById("bar");
+    const $send = document.getElementById("sendBtn");
+    const $stop = document.getElementById("stopBtn");
 
     function add(role, text, cls = "") {
       const el = document.createElement("div");
@@ -259,32 +288,112 @@
       return el;
     }
     function updateBar() {
-      const pct = ai ? Math.min(100, prog(key).messages * 10) : demo.progress();
+      const pct = mode === "demo" ? demo.progress() : Math.min(100, prog(key).messages * 8);
       $bar.style.width = pct + "%";
       if (pct >= 100 && !prog(key).lessonDone) { prog(key).lessonDone = true; save(); }
     }
+    function setBusy(b) {
+      busy = b;
+      $send.disabled = b;
+      $stop.hidden = !b || mode === "demo";
+    }
+    function switchToDemo(reason) {
+      mode = "demo";
+      document.getElementById("modeBadge").innerHTML = modeBadge();
+      add("tutor", reason + "\n\n" + demo.first());
+      updateBar();
+    }
 
-    async function send(text) {
-      if (!text.trim()) return;
-      add("student", text);
+    // صدا
+    const $voice = document.getElementById("voiceBtn");
+    function checkVoice() { if (window.Tutor.persianVoice()) $voice.hidden = false; }
+    checkVoice();
+    if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = checkVoice;
+    $voice.addEventListener("click", () => {
+      voiceOn = !voiceOn;
+      $voice.setAttribute("aria-pressed", String(voiceOn));
+      if (!voiceOn) speechSynthesis.cancel();
+    });
+
+    // عکس سؤال
+    if (imgLim) {
+      const $photoBtn = document.getElementById("photoBtn");
+      const $photo = document.getElementById("photo-input");
+      $photoBtn.hidden = false;
+      $photo.accept = imgLim.mediaTypes.join(",");
+      $photo.addEventListener("change", () => {
+        pendingImage = $photo.files[0] || null;
+        document.getElementById("attachRow").hidden = !pendingImage;
+        document.getElementById("attachName").textContent = pendingImage ? "📎 " + pendingImage.name : "";
+        if (pendingImage && !$input.value) $input.value = "این سؤال را با من حل کن";
+      });
+      document.getElementById("attachClear").addEventListener("click", () => {
+        pendingImage = null; $photo.value = "";
+        document.getElementById("attachRow").hidden = true;
+      });
+    }
+
+    async function send(text, { silent = false } = {}) {
+      if (busy || !text.trim()) return;
+      if (!silent) add("student", text + (pendingImage ? "\n📷 (عکس سؤال)" : ""));
       prog(key).messages++; save();
-      if (!ai) {
+
+      if (mode === "demo") {
         setTimeout(() => { add("tutor", demo.reply(text)); updateBar(); }, 350);
         return;
       }
-      history.push({ role: "user", content: text });
-      const typing = add("tutor", "در حال نوشتن…", "typing");
+
+      history.push({ role: "user", content: pendingImage ? text + "\n(دانش‌آموز عکس یک سؤال را هم فرستاده است.)" : text });
+      const images = pendingImage;
+      pendingImage = null;
+      const attachRow = document.getElementById("attachRow");
+      if (attachRow) attachRow.hidden = true;
+
+      const bubble = add("tutor", "معلم دارد فکر می‌کند…", "typing");
+      setBusy(true);
+      ctl = new AbortController();
       try {
-        const answer = await window.Tutor.askAi(ctx, history);
+        let answer;
+        if (mode === "claude") {
+          answer = await window.Tutor.askClaude(ctx, history, {
+            signal: ctl.signal,
+            images,
+            onText: ({ text }) => {
+              bubble.classList.remove("typing");
+              bubble.innerHTML = md(text);
+              $msgs.scrollTop = $msgs.scrollHeight;
+            }
+          });
+        } else {
+          answer = await window.Tutor.askAi(ctx, history);
+        }
+        bubble.classList.remove("typing");
+        bubble.innerHTML = md(answer);
         history.push({ role: "assistant", content: answer });
-        typing.remove();
-        add("tutor", answer);
-      } catch (err) {
-        typing.remove();
+        if (voiceOn) window.Tutor.speak(answer);
+      } catch (e) {
         history.pop();
-        add("tutor", "ارتباط با هوش مصنوعی برقرار نشد. " + err.message + "\nتنظیمات را چک کنید.", "error");
+        const code = e && e.code;
+        if (code === "cancelled") {
+          if (e.text) { bubble.innerHTML = md(e.text); history.push({ role: "user", content: text }, { role: "assistant", content: e.text }); }
+          else bubble.remove();
+        } else if (["not_granted", "sampling_disabled", "not_declared", "capability_disabled", "capability_removed"].includes(code)) {
+          bubble.remove();
+          switchToDemo("اجازه‌ی استفاده از Claude داده نشد، برای همین کلاس به حالت نمایشی رفت.");
+        } else {
+          bubble.classList.remove("typing");
+          bubble.classList.add("error");
+          const why = code === "rate_limited" ? "تعداد پیام‌ها زیاد شد. چند دقیقه بعد دوباره امتحان کن."
+            : code === "refused" ? "معلم نتوانست به این پیام جواب بدهد. سؤال را جور دیگری بپرس."
+            : code === "session_expired" ? "لطفاً دوباره وارد حساب Claude شو."
+            : code ? "ارتباط قطع شد. دوباره بفرست."
+            : "ارتباط با هوش مصنوعی برقرار نشد. " + (e.message || "") + "\nتنظیمات را چک کن.";
+          bubble.innerHTML = md((e.text ? e.text + "\n\n" : "") + "⚠️ " + why);
+        }
+      } finally {
+        setBusy(false);
+        updateBar();
       }
-      updateBar();
     }
 
     document.getElementById("composer").addEventListener("submit", (e) => {
@@ -294,13 +403,29 @@
     document.getElementById("quick").addEventListener("click", (e) => {
       const b = e.target.closest("[data-q]"); if (b) send(b.dataset.q);
     });
+    $stop.addEventListener("click", () => ctl && ctl.abort());
+    window.addEventListener("hashchange", function leave() {
+      if (location.hash !== myHash) { ctl && ctl.abort(); if ("speechSynthesis" in window) speechSynthesis.cancel(); window.removeEventListener("hashchange", leave); }
+    });
 
-    // شروع درس
-    if (ai) {
-      send(basics ? "سلام، می‌خواهم از پایه شروع کنم. اول پیش‌نیازها را مرور کن." : "سلام، درس را شروع کن.");
-    } else {
+    // شروع کلاس
+    if (mode === "demo") {
       add("tutor", demo.first());
       updateBar();
+    } else {
+      const start = document.createElement("div");
+      start.className = "start-card";
+      start.innerHTML = `
+        <p><b>کلاس «${ch.title}» آماده است.</b><br>معلم درس را قدم‌به‌قدم توضیح می‌دهد و سؤال می‌پرسد. هر وقت خواستی وسط درس سؤال بپرس.</p>
+        <button class="btn primary" type="button" id="startBtn">${basics ? "از پایه شروع کنیم" : "شروع کلاس"}</button>
+        ${mode === "claude" ? '<small class="muted">بار اول، Claude اجازه‌ی استفاده از حسابت را می‌پرسد.</small>' : ""}`;
+      $msgs.appendChild(start);
+      document.getElementById("startBtn").addEventListener("click", () => {
+        start.remove();
+        send(basics
+          ? "سلام! می‌خواهم از پایه شروع کنم. خودت را کوتاه معرفی کن، اول پیش‌نیازهای این فصل را با مثال خیلی ساده مرور کن و بعد یک سؤال ساده بپرس."
+          : "سلام! خودت را کوتاه معرفی کن و درس این فصل را از بخش اول شروع کن. اول یک سؤال کوتاه بپرس تا ببینی چقدر از این فصل بلدم.", { silent: true });
+      });
     }
   }
 

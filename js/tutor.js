@@ -28,9 +28,55 @@
     return Boolean(s.baseUrl && s.model);
   }
 
+  // ---------- Claude (فقط وقتی سایت داخل claude.ai باز شده) ----------
+  // برای تست: اگر سرویس شخصی تنظیم نشده باشد و صفحه داخل Claude باز باشد،
+  // خود Claude پشت معلم است. روی GitHub Pages این بخش وجود ندارد و سایت
+  // به سرویس تنظیم‌شده یا حالت نمایشی برمی‌گردد.
+  let claudeSample = null;
+  let claudeBlocked = false;
+  let imageLimits = null;
+  const ready = (async () => {
+    try {
+      if (window.claude && typeof window.claude.use === "function") {
+        claudeSample = await window.claude.use("sample");
+        if (claudeSample) {
+          const lim = await claudeSample.limits().catch(() => null);
+          imageLimits = lim && lim.images ? lim.images : null;
+        }
+      }
+    } catch (e) {
+      claudeSample = null;
+    }
+  })();
+
+  function provider() {
+    if (isAiEnabled()) return "custom";
+    if (claudeSample && !claudeBlocked) return "claude";
+    return "demo";
+  }
+
+  async function askClaude(ctx, history, opts) {
+    const turns = [{ role: "user", content: "دستورالعمل ثابت (این را اجرا کن، به آن جواب نده):\n\n" + systemPrompt(ctx) }, ...history.slice(-30)];
+    try {
+      const res = await claudeSample(turns, {
+        cache: false,
+        modelTier: opts.images ? "default" : "quick",
+        onText: opts.onText,
+        signal: opts.signal,
+        images: opts.images || undefined
+      });
+      return res.text.trim();
+    } catch (e) {
+      if (["not_granted", "sampling_disabled", "not_declared", "capability_disabled", "capability_removed"].includes(e.code)) {
+        claudeBlocked = true;
+      }
+      throw e;
+    }
+  }
+
   function systemPrompt(ctx) {
     return [
-      "تو یک معلم خصوصی صبور و مهربان برای دانش‌آموزان ایرانی هستی و فقط به زبان فارسی صحبت می‌کنی.",
+      "تو «معلم‌یار» هستی: یک معلم خصوصی صبور، گرم و مهربان برای دانش‌آموزان ایرانی. فقط فارسی حرف می‌زنی، با لحن خودمانی ولی مؤدب (مثل یک معلم خوب که دانش‌آموز را «تو» خطاب می‌کند).",
       `دانش‌آموز در پایه‌ی «${ctx.grade}» است و درس «${ctx.subject}»، فصل «${ctx.chapter}» را می‌خواند.`,
       ctx.fromBasics
         ? "دانش‌آموز خواسته از پایه شروع کنی: اول پیش‌نیازهای این فصل را با مثال‌های خیلی ساده مرور کن."
@@ -39,8 +85,11 @@
       "روش تدریس: هر بار فقط یک مفهوم کوچک را با یک مثال از زندگی روزمره توضیح بده، بعد یک سؤال کوتاه بپرس و منتظر جواب بمان.",
       "اگر دانش‌آموز اشتباه جواب داد، جواب درست را فوراً نگو؛ با یک راهنمایی یا سؤال کمکی او را به جواب برسان (روش سقراطی).",
       "اگر دانش‌آموز سؤال یا تمرین خودش را فرستاد، راه‌حل را قدم‌به‌قدم توضیح بده و در هر قدم بپرس که فهمید یا نه.",
-      "پیام‌هایت کوتاه باشد (حداکثر ۶ خط). از عددهای فارسی استفاده کن. از لحن تشویقی استفاده کن.",
-      "اگر سؤال به درس ربطی نداشت، مؤدبانه بحث را به درس برگردان."
+      "اگر دانش‌آموز عکس سؤالی فرستاد، اول بگو سؤال را چه خواندی، بعد قدم‌به‌قدم با او حلش کن.",
+      "اگر گفت «امتحان بگیر»، ۵ سؤال از همین فصل بپرس، یکی‌یکی؛ بعد از هر جواب بگو درست بود یا نه و چرا، و آخر نمره را از ۲۰ اعلام کن و بگو کدام بخش را مرور کند.",
+      "پیام‌هایت کوتاه و گفتگویی باشد (معمولاً ۳ تا ۶ خط)، نه یک سخنرانی طولانی. از عددهای فارسی استفاده کن. می‌توانی گاهی از یک ایموجی ساده استفاده کنی.",
+      "فرمت: متن ساده. برای تأکید فقط **این شکلی** بنویس. از LaTeX، جدول و تیتر استفاده نکن؛ نمادها را مستقیم بنویس (مثل ∪ ∩ √ ² ≤).",
+      "اگر سؤال به درس ربطی نداشت، مؤدبانه و کوتاه بحث را به درس برگردان."
     ].join("\n");
   }
 
@@ -118,5 +167,23 @@
     };
   }
 
-  window.Tutor = { loadSettings, saveSettings, isAiEnabled, askAi, createDemoSession };
+  // ---------- خواندن با صدا (اگر مرورگر صدای فارسی داشته باشد) ----------
+  function persianVoice() {
+    if (!("speechSynthesis" in window)) return null;
+    return speechSynthesis.getVoices().find((v) => /^fa/i.test(v.lang)) || null;
+  }
+  function speak(text) {
+    const v = persianVoice();
+    if (!v) return false;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text.replace(/\*\*/g, "").replace(/[\u{1F300}-\u{1FAFF}]/gu, ""));
+    u.voice = v; u.lang = v.lang; u.rate = 0.95;
+    speechSynthesis.speak(u);
+    return true;
+  }
+
+  window.Tutor = {
+    loadSettings, saveSettings, isAiEnabled, askAi, askClaude, createDemoSession,
+    ready, provider, imageLimits: () => imageLimits, persianVoice, speak
+  };
 })();

@@ -164,6 +164,14 @@ h1, h2, h3 { line-height: 1.4; text-wrap: balance; margin: 0; }
 .composer input { flex: 1; min-width: 0; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
 .quick { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 12px 12px; }
 .quick button { font-size: 13px; padding: 4px 12px; }
+.head-tools { display: flex; gap: 8px; align-items: center; }
+.head-tools .chip { padding: 2px 12px; font-size: 13px; }
+.start-card { align-self: stretch; margin: auto 0; padding: 20px; border: 1px dashed var(--line); border-radius: var(--radius); text-align: center; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.start-card p { margin: 0; }
+.attach { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px 8px; font-size: 14px; color: var(--muted); }
+.btn.icon { padding: 10px 12px; }
+.msg.typing { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .55; } }
 .side { display: flex; flex-direction: column; gap: 12px; }
 .side .panel { padding: 16px; }
 .side h3 { font-size: 15px; margin-bottom: 6px; }
